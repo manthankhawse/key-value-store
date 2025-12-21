@@ -2,6 +2,9 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+
+#define MAX_LEN 4096
+
 using namespace std;
 
 class Client {
@@ -9,60 +12,107 @@ private:
     int fd = -1;
     sockaddr_in addr{};
 
+    bool write_full(const void* buf, size_t len) {
+        const char* p = static_cast<const char*>(buf);
+        while (len > 0) {
+            ssize_t n = write(fd, p, len);
+            if (n <= 0) {
+                perror("write");
+                return false;
+            }
+            p += n;
+            len -= n;
+        }
+        return true;
+    }
+
+    bool read_full(void* buf, size_t len) {
+        char* p = static_cast<char*>(buf);
+        while (len > 0) {
+            ssize_t n = read(fd, p, len);
+            if (n <= 0) {
+                perror("read");
+                return false;
+            }
+            p += n;
+            len -= n;
+        }
+        return true;
+    }
+
 public:
-    int connect_to_server(const char* ip, uint16_t port) {
+    bool connect_to_server(const char* ip, uint16_t port) {
         fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
             perror("socket");
-            return -1;
+            return false;
         }
 
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
-        inet_pton(AF_INET, ip, &addr.sin_addr);
+        if (inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
+            perror("inet_pton");
+            return false;
+        }
 
         if (::connect(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
             perror("connect");
-            return -1;
+            return false;
         }
 
-        return 0;
+        return true;
     }
 
-    int send_message(const char* msg) {
-        size_t len = strlen(msg);
-
-        ssize_t n = write(fd, msg, len);
-        if (n < 0) {
-            perror("write");
-            return -1;
+    bool send_message(const string& msg) {
+        if (msg.size() > MAX_LEN) {
+            cerr << "message too large\n";
+            return false;
         }
 
-        char buf[64] = {};
-        n = read(fd, buf, sizeof(buf) - 1);
-        if (n < 0) {
-            perror("read");
-            return -1;
+        uint32_t len = msg.size();
+
+        char wbuf[4 + MAX_LEN];
+        memcpy(wbuf, &len, 4);
+        memcpy(wbuf + 4, msg.data(), len);
+
+        if (!write_full(wbuf, 4 + len))
+            return false;
+
+        uint32_t rlen = 0;
+        if (!read_full(&rlen, 4))
+            return false;
+
+        if (rlen > MAX_LEN) {
+            cerr << "response too large\n";
+            return false;
         }
 
-        buf[n] = '\0';
-        cout << "Server says: " << buf << endl;
-        return 0;
+        char rbuf[MAX_LEN + 1];
+        if (!read_full(rbuf, rlen))
+            return false;
+
+        rbuf[rlen] = '\0';
+        cout << "Server says: " << rbuf << endl;
+        return true;
     }
 
     void close_connection() {
-        if (fd >= 0) close(fd);
-        fd = -1;
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
     }
 };
 
 int main() {
     Client client;
 
-    if (client.connect_to_server("127.0.0.1", 1234) < 0)
+    if (!client.connect_to_server("127.0.0.1", 1234))
         return 1;
 
-    client.send_message("Hello From Client");
+    client.send_message("Hello From Client1");
+    client.send_message("Hello From Client2");
+    client.send_message("Hello From Client3");
     client.close_connection();
     return 0;
 }
