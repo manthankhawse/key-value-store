@@ -110,9 +110,20 @@ int main() {
     if (!client.connect_to_server("127.0.0.1", 1234))
         return 1;
 
-    client.send_message("Hello From Client1");
-    client.send_message("Hello From Client2");
-    client.send_message("Hello From Client3");
+    client.send_message("SET foo bar");
+    client.send_message("GET foo");
+    client.send_message("EXISTS foo");
+    client.send_message("DELETE foo");
+    client.send_message("EXISTS foo");
+    client.send_message("GET foo");
+
+    client.send_message("SET moo nar");
+    client.send_message("GET moo");
+    client.send_message("EXISTS moo");
+    client.send_message("DELETE moo");
+    client.send_message("EXISTS moo");
+    client.send_message("GET moo");
+
     client.close_connection();
     return 0;
 }

@@ -142,6 +142,18 @@ HashEntry* HashTable::bucket_at_idx(uint64_t idx){
     return table[idx];
 }
 
+void HashTable::insert_entry(HashEntry* e) {
+    uint64_t idx = hash(e->key, e->key_len);
+    e->next = table[idx];
+    table[idx] = e;
+    size++;
+}
+
+
+void HashTable::decrement_size(){
+    size--;
+}
+
 void HashTable::set_null(uint64_t idx){
     table[idx] = nullptr;
 }

@@ -15,14 +15,9 @@ void Dict::start_rehashing(){
     rehash_idx = 0;
 }
 
-bool Dict::insert_into(HashTable* ht, HashEntry* entry){
-    return ht->insert(entry->key, entry->key_len, entry->val, entry->val_len);
-}
 
 HashEntry* Dict::find_from(const char* key, uint32_t key_len){
-    if(rehash_idx!=-1){
-        rehash();
-    }
+
     HashEntry* found = ht[0]->find(key, key_len);
 
     if(found){
@@ -36,18 +31,25 @@ HashEntry* Dict::find_from(const char* key, uint32_t key_len){
     return found;
 }
 
-bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len){
-    if(rehash_idx!=-1){
+bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len) {
+ 
+    if (rehash_idx != -1) {
         rehash();
-        return ht[1]->insert(key, key_len, val, val_len);
-    }else{
-        bool success = ht[0]->insert(key, key_len, val, val_len);
-        if(should_start_rehashing()){
-            start_rehashing();
-        }
-
-        return success;
     }
+ 
+    if (rehash_idx != -1) { 
+        ht[0]->erase(key, key_len);
+ 
+        return ht[1]->insert(key, key_len, val, val_len);
+    }
+ 
+    bool success = ht[0]->insert(key, key_len, val, val_len);
+    
+    if (should_start_rehashing()) {
+        start_rehashing();
+    }
+
+    return success;
 }
 
 bool Dict::erase_from(const char* key, uint32_t len){
@@ -67,16 +69,15 @@ bool Dict::erase_from(const char* key, uint32_t len){
     return removed;
 }
 
-void Dict::rehash(){
-    if(rehash_idx==-1){
-        return;
-    }
+void Dict::rehash() {
+    if (rehash_idx == -1) return;
 
-    while(rehash_idx < ht[0]->get_bucket_count() && ht[0]->bucket_at_idx(rehash_idx)==nullptr){
+    while (rehash_idx < ht[0]->get_bucket_count() &&
+           ht[0]->bucket_at_idx(rehash_idx) == nullptr) {
         rehash_idx++;
     }
 
-    if(rehash_idx==ht[0]->get_bucket_count()){
+    if (rehash_idx == ht[0]->get_bucket_count()) {
         delete ht[0];
         ht[0] = ht[1];
         ht[1] = nullptr;
@@ -85,19 +86,19 @@ void Dict::rehash(){
     }
 
     HashEntry* e = ht[0]->bucket_at_idx(rehash_idx);
+    ht[0]->set_null(rehash_idx);
 
-    while(e){
+    while (e) {
         HashEntry* next = e->next;
-        insert_into(ht[1], e);
-        free(e->key);
-        free(e->val);
-        free(e);
+        e->next = nullptr;          
+        ht[1]->insert_entry(e);    
+        ht[0]->decrement_size();
         e = next;
     }
 
-    ht[0]->set_null(rehash_idx);
     rehash_idx++;
 }
+
 
 bool Dict::should_start_rehashing(){
     return ht[0]->count() >= ht[0]->get_bucket_count();

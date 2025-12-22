@@ -25,6 +25,8 @@ class HashTable{
 
     ~HashTable();
 
+    void insert_entry(HashEntry* e);
+
     HashEntry* find(const char* key, uint32_t len);
 
     bool insert(const char* key, uint32_t key_len, const char* val, uint32_t val_len);
@@ -42,4 +44,6 @@ class HashTable{
     }
 
     HashEntry* bucket_at_idx(uint64_t idx);
+
+    void decrement_size();
 };
