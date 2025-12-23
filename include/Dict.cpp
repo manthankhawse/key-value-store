@@ -1,6 +1,7 @@
 #include "Dict.h"
 #include "hashmap.h"
 #include <sys/types.h>
+#include <unordered_set>
 
 
 Dict::Dict(uint32_t init_buckets){
@@ -104,7 +105,42 @@ bool Dict::should_start_rehashing(){
     return ht[0]->count() >= ht[0]->get_bucket_count();
 }
 
+void Dict::get_all_keys(vector<string>& out) {
+    // 1. Keys still in old table (not yet rehashed)
+    if (rehash_idx != -1) {
+        for (size_t i = rehash_idx; i < ht[0]->get_bucket_count(); i++) {
+            HashEntry* e = ht[0]->bucket_at_idx(i);
+            while (e) {
+                out.emplace_back(e->key, e->key_len);
+                e = e->next;
+            }
+        }
+    } else {
+        // No rehash: all keys in ht[0]
+        for (size_t i = 0; i < ht[0]->get_bucket_count(); i++) {
+            HashEntry* e = ht[0]->bucket_at_idx(i);
+            while (e) {
+                out.emplace_back(e->key, e->key_len);
+                e = e->next;
+            }
+        }
+    }
+
+    // 2. Keys already moved to new table
+    if (rehash_idx != -1) {
+        for (size_t i = 0; i < ht[1]->get_bucket_count(); i++) {
+            HashEntry* e = ht[1]->bucket_at_idx(i);
+            while (e) {
+                out.emplace_back(e->key, e->key_len);
+                e = e->next;
+            }
+        }
+    }
+}
+
+
 Dict::~Dict(){
     delete ht[0];
     delete ht[1];
 }
+

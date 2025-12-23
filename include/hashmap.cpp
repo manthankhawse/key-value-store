@@ -154,6 +154,10 @@ void HashTable::decrement_size(){
     size--;
 }
 
+uint32_t HashTable::get_size(){
+    return size;
+}
+
 void HashTable::set_null(uint64_t idx){
     table[idx] = nullptr;
 }

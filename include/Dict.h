@@ -1,5 +1,8 @@
 #pragma once
+#include <vector>
+#include <string>
 #include "hashmap.h"
+using namespace std;
 
 class Dict{
     private:
@@ -11,6 +14,7 @@ class Dict{
         ~Dict();
         void start_rehashing();
         void rehash();
+        void get_all_keys(vector<string>& out);
         bool insert_into(HashTable* ht, HashEntry* entry);
         bool insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len);
         bool erase_from(const char* key, uint32_t key_len);

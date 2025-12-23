@@ -113,6 +113,7 @@ int main() {
     client.send_message("SET foo bar");
     client.send_message("GET foo");
     client.send_message("EXISTS foo");
+    client.send_message("KEYS");
     client.send_message("DELETE foo");
     client.send_message("EXISTS foo");
     client.send_message("GET foo");
@@ -120,6 +121,7 @@ int main() {
     client.send_message("SET moo nar");
     client.send_message("GET moo");
     client.send_message("EXISTS moo");
+    client.send_message("KEYS");
     client.send_message("DELETE moo");
     client.send_message("EXISTS moo");
     client.send_message("GET moo");

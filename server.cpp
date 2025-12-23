@@ -21,9 +21,7 @@ Dict *dict = new Dict(128);
 
 enum ConnectionState { READING, WRITING, CLOSED };
 
-enum RequestType { GET, SET, DELETE, EXISTS, UNKNOWN };
-
-enum ResponseType { RES_OK, RES_NX, RES_ERR };
+enum RequestType { GET, SET, DELETE, EXISTS, KEYS, UNKNOWN };
 
 struct parsed_request {
   RequestType type;
@@ -31,9 +29,8 @@ struct parsed_request {
   char *value;
 };
 
-struct parsed_response {
-  ResponseType type;
-  char *value;
+struct Response {
+  string payload;
 };
 
 class Server {
@@ -138,62 +135,74 @@ public:
     } else if (cmd == "EXISTS" && tokens.size() == 2) {
       p.type = EXISTS;
       p.key = alloc_copy(tokens[1]);
+    } else if (cmd == "KEYS" && tokens.size() == 1) {
+      p.type = KEYS;
     }
 
     return p;
   }
 
-  static parsed_response process_request(parsed_request p) {
-    parsed_response res{};
-    res.value = nullptr;
-
-    const char *ok = "OK";
-    const char *fail = "FAIL";
+  static Response process_request(parsed_request p) {
+    Response r;
 
     switch (p.type) {
 
     case GET: {
       HashEntry *e = dict->find_from(p.key, strlen(p.key));
-      if (e) {
-        res.type = RES_OK;
-        res.value = (char *)malloc(e->val_len);
-        memcpy(res.value, e->val, e->val_len);
+      if (!e) {
+        r.payload = ser_nil();
       } else {
-        res.type = RES_NX;
-        const char *msg = "NOT_FOUND";
-        res.value = strdup(msg);
+        r.payload = ser_str(string(e->val, e->val_len));
       }
       break;
     }
 
     case SET: {
-      bool okk =
-          dict->insert_into(p.key, strlen(p.key), p.value, strlen(p.value));
-      res.type = okk ? RES_OK : RES_ERR;
-      res.value = strdup(okk ? ok : fail);
+      dict->insert_into(p.key, strlen(p.key), p.value, strlen(p.value));
+      r.payload = ser_nil();
       break;
     }
 
     case DELETE: {
-      bool okk = dict->erase_from(p.key, strlen(p.key));
-      res.type = okk ? RES_OK : RES_NX;
-      res.value = strdup(okk ? ok : fail);
+      bool ok = dict->erase_from(p.key, strlen(p.key));
+      r.payload = ser_int(ok ? 1 : 0);
       break;
     }
 
     case EXISTS: {
-      bool okk = dict->find_from(p.key, strlen(p.key)) != nullptr;
-      res.type = okk ? RES_OK : RES_NX;
-      res.value = strdup(okk ? "1" : "0");
+      bool ok = dict->find_from(p.key, strlen(p.key)) != nullptr;
+      r.payload = ser_int(ok ? 1 : 0);
       break;
     }
-
+    case KEYS: {
+      vector<string> keys;
+      dict->get_all_keys(keys);
+      r.payload = ser_arr(keys);
+      break;
+    }
     default:
-      res.type = RES_ERR;
-      res.value = strdup("UNKNOWN_CMD");
+      r.payload = ser_err(1, "Unknown cmd");
     }
 
-    return res;
+    return r;
+  }
+
+  static string ser_err(int code, const string &msg) {
+    return "(err) " + to_string(code) + " " + msg;
+  }
+
+  static string ser_nil() { return "(nil)"; }
+
+  static string ser_str(const string &s) { return "(str) " + s; }
+
+  static string ser_int(int v) { return "(int) " + to_string(v); }
+
+  static string ser_arr(const vector<string> &elems) {
+    string out = "(arr) len=" + to_string(elems.size()) + "\n";
+    for (auto &e : elems)
+      out += "(str) " + e + "\n";
+    out += "(arr) end";
+    return out;
   }
 
   int epollfd() const { return epoll_fd; }
@@ -252,9 +261,9 @@ public:
       cout << "Client said: " << payload << endl;
 
       parsed_request p = Server::parse_request(payload);
-      parsed_response response = Server::process_request(p);
+      Response response = Server::process_request(p);
+      string &res = response.payload;
       // send response
-      string res = "[" + to_string(response.type) + "] " + response.value;
       write_buf.resize(4 + res.size());
       len = res.size();
       memcpy(&write_buf[0], &len, 4);

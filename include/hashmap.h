@@ -44,6 +44,7 @@ class HashTable{
     }
 
     HashEntry* bucket_at_idx(uint64_t idx);
-
+    
+    uint32_t get_size();
     void decrement_size();
 };
