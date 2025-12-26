@@ -1,4 +1,5 @@
 #include "hashmap.h"
+#include "Robj.h"
 #include <cstdint>
 #include <cstring>
 using namespace std;
@@ -40,34 +41,33 @@ HashTable::~HashTable(){
     free(table);
 }
 
-HashEntry* HashTable::find(const char* key, uint32_t key_len){
-    uint64_t table_key = hash(key, key_len);
+HashEntry* HashTable::find(Robj* key){
+    uint64_t table_key = hash((const char*)key->ptr, key->len);
 
     if(!table[table_key]) return nullptr;
 
-    HashEntry* ptr = table[table_key];
+    HashEntry* curr = table[table_key];
 
-    while(ptr){
-        if(ptr->key_len == key_len && memcmp(ptr->key, key, key_len) == 0){
-            return ptr;
+    while(curr){
+        if(curr->key->len == key->len && memcmp(curr->key->ptr, key->ptr, key->len) == 0){
+            return curr;
         }
-        ptr = ptr->next;
+        curr = curr->next;
     }
 
     return nullptr;
 }
 
-bool HashTable::insert(const char* key, uint32_t key_len, const char* val, uint32_t val_len){
-    uint64_t table_key = hash(key, key_len);
+bool HashTable::insert(Robj* key, Robj* val){
+    uint64_t table_key = hash((const char*)key->ptr, key->len);
     
     HashEntry* cur = table[table_key];
     while (cur) {
-        if (cur->key_len == key_len &&
-            memcmp(cur->key, key, key_len) == 0) {
-            free(cur->val);
-            cur->val = (char*)malloc(val_len);
-            memcpy(cur->val, val, val_len);
-            cur->val_len = val_len;
+        if (cur->key->len == key->len &&
+            memcmp(cur->key->ptr, key->ptr, key->len) == 0) {
+            decr_refcount(cur->val);
+            incr_refcount(val);
+            cur->val = val;
             return true;
         }
         cur = cur->next;
@@ -82,13 +82,11 @@ bool HashTable::insert(const char* key, uint32_t key_len, const char* val, uint3
         if(!ptr){
             return false;
         }
-
-        ptr->key = (char*)malloc(key_len);
-        memcpy(ptr->key, key, key_len);
-        ptr->key_len = key_len;
-        ptr->val = (char*)malloc(val_len);
-        memcpy(ptr->val, val, val_len);
-        ptr->val_len = val_len;
+        
+        incr_refcount(key);
+        ptr->key = key;
+        incr_refcount(val);
+        ptr->val = val;
         ptr->next = nullptr;
         table[table_key] = ptr;
         return true;
@@ -100,30 +98,28 @@ bool HashTable::insert(const char* key, uint32_t key_len, const char* val, uint3
     }
 
     
-    newEntry->key = (char*)malloc(key_len*sizeof(char));
-    memcpy(newEntry->key, key, key_len);
-    newEntry->key_len = key_len;
-    newEntry->val = (char*)malloc(val_len*sizeof(char));
-    memcpy(newEntry->val, val, val_len);
-    newEntry->val_len = val_len;
+    incr_refcount(key);
+    newEntry->key = key;
+    incr_refcount(val);
+    newEntry->val = val;
     newEntry->next = ptr;
     table[table_key] = newEntry;
     size++;
     return true;
 }
 
-bool HashTable::erase(const char* key, uint32_t key_len){
-    uint64_t table_key = hash(key, key_len);
+bool HashTable::erase(Robj* key){
+    uint64_t table_key = hash((const char*)key->ptr, key->len);
     HashEntry* prev = nullptr;
     HashEntry* ptr = table[table_key];
 
     while(ptr){
-        if (ptr->key_len == key_len && memcmp(ptr->key, key, key_len) == 0){
+        if (ptr->key->len == key->len && memcmp(ptr->key->ptr, key->ptr, key->len) == 0){
             if(prev) prev->next = ptr->next; 
             else table[table_key] = ptr->next;
             
-            free(ptr->val);
-            free(ptr->key);
+            decr_refcount(ptr->val);
+            decr_refcount(ptr->key);
             free(ptr);
             size--;
 
@@ -143,7 +139,7 @@ HashEntry* HashTable::bucket_at_idx(uint64_t idx){
 }
 
 void HashTable::insert_entry(HashEntry* e) {
-    uint64_t idx = hash(e->key, e->key_len);
+    uint64_t idx = hash((const char*)e->key->ptr, e->key->len);
     e->next = table[idx];
     table[idx] = e;
     size++;

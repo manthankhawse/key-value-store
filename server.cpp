@@ -1,5 +1,6 @@
 #include "include/Dict.h"
 #include "include/hashmap.h"
+#include "include/Robj.h"
 #include <arpa/inet.h>
 #include <bits/stdc++.h>
 #include <cstring>
@@ -152,7 +153,7 @@ public:
       if (!e) {
         r.payload = ser_nil();
       } else {
-        r.payload = ser_str(string(e->val, e->val_len));
+        r.payload = ser_str(string((const char*)e->val->ptr, e->val->len));
       }
       break;
     }

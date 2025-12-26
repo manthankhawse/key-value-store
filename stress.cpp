@@ -1,4 +1,5 @@
 #include "include/Dict.h"
+#include "include/Robj.h"
 #include <bits/stdc++.h>
 using namespace std;
 
@@ -44,7 +45,7 @@ int main() {
                     cerr << "ERROR: missing key " << key << endl;
                     return 1;
                 }
-                if (string(e->val, e->val_len) != it->second) {
+                if (string((const char*)e->val->ptr, e->val->len) != it->second) {
                     cerr << "ERROR: value mismatch for " << key << endl;
                     return 1;
                 }
@@ -63,7 +64,7 @@ int main() {
     // final verification
     for (auto& [k, v] : ref) {
         HashEntry* e = dict.find_from(k.c_str(), k.size());
-        if (!e || string(e->val, e->val_len) != v) {
+        if (!e || string((const char*)e->val->ptr, e->val->len) != v) {
             cerr << "FINAL CHECK FAILED for key " << k << endl;
             return 1;
         }

@@ -1,7 +1,7 @@
 #include "Dict.h"
+#include "Robj.h"
 #include "hashmap.h"
 #include <sys/types.h>
-#include <unordered_set>
 
 
 Dict::Dict(uint32_t init_buckets){
@@ -19,32 +19,37 @@ void Dict::start_rehashing(){
 
 HashEntry* Dict::find_from(const char* key, uint32_t key_len){
 
-    HashEntry* found = ht[0]->find(key, key_len);
+    Robj* key_obj = create_string_obj(key, key_len);
+
+    HashEntry* found = ht[0]->find(key_obj);
 
     if(found){
         return found;
     }
     
     if(ht[1]){
-        found = ht[1]->find(key, key_len);
+        found = ht[1]->find(key_obj);
     }
 
     return found;
 }
 
 bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len) {
+
+    Robj* key_obj = create_string_obj(key, key_len);
+    Robj* val_obj = create_string_obj(val, val_len);
  
     if (rehash_idx != -1) {
         rehash();
     }
  
     if (rehash_idx != -1) { 
-        ht[0]->erase(key, key_len);
+        ht[0]->erase(key_obj);
  
-        return ht[1]->insert(key, key_len, val, val_len);
+        return ht[1]->insert(key_obj, val_obj);
     }
  
-    bool success = ht[0]->insert(key, key_len, val, val_len);
+    bool success = ht[0]->insert(key_obj, val_obj);
     
     if (should_start_rehashing()) {
         start_rehashing();
@@ -58,9 +63,11 @@ bool Dict::erase_from(const char* key, uint32_t len){
         rehash();
     }
 
-    bool removed = ht[0]->erase(key, len);
+    Robj* key_obj = create_string_obj(key, len);
+
+    bool removed = ht[0]->erase(key_obj);
     if(!removed && ht[1]){
-        removed = ht[1]->erase(key, len);
+        removed = ht[1]->erase(key_obj);
     }
 
     if(rehash_idx==-1 && should_start_rehashing()){
@@ -111,7 +118,7 @@ void Dict::get_all_keys(vector<string>& out) {
         for (size_t i = rehash_idx; i < ht[0]->get_bucket_count(); i++) {
             HashEntry* e = ht[0]->bucket_at_idx(i);
             while (e) {
-                out.emplace_back(e->key, e->key_len);
+                out.emplace_back((const char*)e->key->ptr, e->key->len);
                 e = e->next;
             }
         }
@@ -120,7 +127,7 @@ void Dict::get_all_keys(vector<string>& out) {
         for (size_t i = 0; i < ht[0]->get_bucket_count(); i++) {
             HashEntry* e = ht[0]->bucket_at_idx(i);
             while (e) {
-                out.emplace_back(e->key, e->key_len);
+                out.emplace_back((const char*)e->key->ptr, e->key->len);
                 e = e->next;
             }
         }
@@ -131,7 +138,7 @@ void Dict::get_all_keys(vector<string>& out) {
         for (size_t i = 0; i < ht[1]->get_bucket_count(); i++) {
             HashEntry* e = ht[1]->bucket_at_idx(i);
             while (e) {
-                out.emplace_back(e->key, e->key_len);
+                out.emplace_back((const char*)e->key->ptr, e->key->len);
                 e = e->next;
             }
         }

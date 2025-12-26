@@ -2,12 +2,12 @@
 #include <cstdint>
 #include <cstddef>
 #include <string>
+#include "Robj.h"
+
 
 struct HashEntry{
-    char* key;
-    uint32_t key_len;
-    char* val;
-    uint32_t val_len;
+    Robj* key;
+    Robj* val;
     struct HashEntry* next;
 };
 
@@ -27,11 +27,11 @@ class HashTable{
 
     void insert_entry(HashEntry* e);
 
-    HashEntry* find(const char* key, uint32_t len);
+    HashEntry* find(Robj* key);
 
-    bool insert(const char* key, uint32_t key_len, const char* val, uint32_t val_len);
+    bool insert(Robj* key, Robj* val);
 
-    bool erase(const char* key, uint32_t len);
+    bool erase(Robj* key);
 
     size_t count(){
         return size;
