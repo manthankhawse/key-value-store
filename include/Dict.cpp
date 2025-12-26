@@ -24,6 +24,7 @@ HashEntry* Dict::find_from(const char* key, uint32_t key_len){
     HashEntry* found = ht[0]->find(key_obj);
 
     if(found){
+        decr_refcount(key_obj);
         return found;
     }
     
@@ -31,6 +32,7 @@ HashEntry* Dict::find_from(const char* key, uint32_t key_len){
         found = ht[1]->find(key_obj);
     }
 
+    decr_refcount(key_obj);
     return found;
 }
 
@@ -46,10 +48,17 @@ bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint3
     if (rehash_idx != -1) { 
         ht[0]->erase(key_obj);
  
-        return ht[1]->insert(key_obj, val_obj);
+        bool ok = ht[1]->insert(key_obj, val_obj);
+        decr_refcount(key_obj);
+        decr_refcount(val_obj);
+
+        return ok;
     }
  
     bool success = ht[0]->insert(key_obj, val_obj);
+
+    decr_refcount(key_obj);
+    decr_refcount(val_obj);
     
     if (should_start_rehashing()) {
         start_rehashing();
@@ -66,9 +75,12 @@ bool Dict::erase_from(const char* key, uint32_t len){
     Robj* key_obj = create_string_obj(key, len);
 
     bool removed = ht[0]->erase(key_obj);
+
     if(!removed && ht[1]){
         removed = ht[1]->erase(key_obj);
     }
+
+    decr_refcount(key_obj);
 
     if(rehash_idx==-1 && should_start_rehashing()){
         start_rehashing();

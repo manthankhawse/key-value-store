@@ -5,6 +5,7 @@
 
 Robj* create_string_obj(const char* data, uint32_t len){
     Robj* o = (Robj*)malloc(sizeof(Robj));
+    o->refcount = 1; 
     o->type = RobjType::OBJ_STRING;
     o->len = len;
     o->ptr = malloc(len);
