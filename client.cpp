@@ -88,11 +88,12 @@ public:
         }
 
         char rbuf[MAX_LEN + 1];
-        if (!read_full(rbuf, rlen))
-            return false;
+if (!read_full(rbuf, rlen))
+    return false;
+string payload(rbuf, rlen);
 
-        rbuf[rlen] = '\0';
-        cout << "Server says: " << rbuf << endl;
+cout << "Server says:\n" << payload << endl;
+
         return true;
     }
 
@@ -106,25 +107,28 @@ public:
 
 int main() {
     Client client;
-
     if (!client.connect_to_server("127.0.0.1", 1234))
         return 1;
 
     client.send_message("SET foo bar");
     client.send_message("GET foo");
-    client.send_message("EXISTS foo");
-    client.send_message("KEYS");
-    client.send_message("DELETE foo");
-    client.send_message("EXISTS foo");
-    client.send_message("GET foo");
+    
+    cout << "\n--- ZSet Tests ---\n";
+    
+    client.send_message("ZADD scores 100.5 alice");
+    client.send_message("ZADD scores 200.0 bob");
+    client.send_message("ZADD scores 50.0 charlie");
+    
+    cout << "Checking Rank for Alice (expect 1):" << endl;
+    client.send_message("ZRANK scores alice");
 
-    client.send_message("SET moo nar");
-    client.send_message("GET moo");
-    client.send_message("EXISTS moo");
-    client.send_message("KEYS");
-    client.send_message("DELETE moo");
-    client.send_message("EXISTS moo");
-    client.send_message("GET moo");
+    cout << "Getting all scores (0 to -1 implies all):" << endl;
+    client.send_message("ZRANGE scores 0 5");
+
+    client.send_message("ZREM scores alice");
+    
+    cout << "Checking Range after Delete:" << endl;
+    client.send_message("ZRANGE scores 0 5");
 
     client.close_connection();
     return 0;

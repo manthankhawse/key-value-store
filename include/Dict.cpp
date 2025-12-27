@@ -1,5 +1,5 @@
-#include "Dict.h"
 #include "Robj.h"
+#include "Dict.h"
 #include "hashmap.h"
 #include <sys/types.h>
 
@@ -19,7 +19,7 @@ void Dict::start_rehashing(){
 
 HashEntry* Dict::find_from(const char* key, uint32_t key_len){
 
-    Robj* key_obj = create_string_obj(key, key_len);
+    Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
 
     HashEntry* found = ht[0]->find(key_obj);
 
@@ -38,8 +38,8 @@ HashEntry* Dict::find_from(const char* key, uint32_t key_len){
 
 bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len) {
 
-    Robj* key_obj = create_string_obj(key, key_len);
-    Robj* val_obj = create_string_obj(val, val_len);
+    Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
+    Robj* val_obj = create_obj(val, val_len, RobjType::OBJ_STRING);
  
     if (rehash_idx != -1) {
         rehash();
@@ -67,12 +67,43 @@ bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint3
     return success;
 }
 
+bool Dict::insert_into(const char* key, uint32_t key_len){
+    Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
+    Robj* val_obj = create_zset_obj();
+
+    if (rehash_idx != -1) {
+        rehash();
+    }
+ 
+    if (rehash_idx != -1) { 
+        ht[0]->erase(key_obj);
+ 
+        bool ok = ht[1]->insert(key_obj, val_obj);
+        decr_refcount(key_obj);
+        decr_refcount(val_obj);
+
+        return ok;
+    }
+ 
+    bool success = ht[0]->insert(key_obj, val_obj);
+
+    decr_refcount(key_obj);
+    decr_refcount(val_obj);
+    
+    if (should_start_rehashing()) {
+        start_rehashing();
+    }
+
+    return success;
+
+}
+
 bool Dict::erase_from(const char* key, uint32_t len){
     if(rehash_idx!=-1){
         rehash();
     }
 
-    Robj* key_obj = create_string_obj(key, len);
+    Robj* key_obj = create_obj(key, len, RobjType::OBJ_STRING);
 
     bool removed = ht[0]->erase(key_obj);
 
@@ -125,7 +156,6 @@ bool Dict::should_start_rehashing(){
 }
 
 void Dict::get_all_keys(vector<string>& out) {
-    // 1. Keys still in old table (not yet rehashed)
     if (rehash_idx != -1) {
         for (size_t i = rehash_idx; i < ht[0]->get_bucket_count(); i++) {
             HashEntry* e = ht[0]->bucket_at_idx(i);
@@ -135,7 +165,6 @@ void Dict::get_all_keys(vector<string>& out) {
             }
         }
     } else {
-        // No rehash: all keys in ht[0]
         for (size_t i = 0; i < ht[0]->get_bucket_count(); i++) {
             HashEntry* e = ht[0]->bucket_at_idx(i);
             while (e) {
@@ -145,7 +174,6 @@ void Dict::get_all_keys(vector<string>& out) {
         }
     }
 
-    // 2. Keys already moved to new table
     if (rehash_idx != -1) {
         for (size_t i = 0; i < ht[1]->get_bucket_count(); i++) {
             HashEntry* e = ht[1]->bucket_at_idx(i);

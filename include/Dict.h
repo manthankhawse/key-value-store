@@ -16,8 +16,8 @@ class Dict{
         void start_rehashing();
         void rehash();
         void get_all_keys(vector<string>& out);
-        bool insert_into(HashTable* ht, HashEntry* entry);
         bool insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len);
+        bool insert_into(const char* key, uint32_t key_len);
         bool erase_from(const char* key, uint32_t key_len);
         HashEntry* find_from(const char* key, uint32_t key_len);
         bool should_start_rehashing();

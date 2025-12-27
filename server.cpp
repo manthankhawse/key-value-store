@@ -1,6 +1,7 @@
 #include "include/Dict.h"
 #include "include/hashmap.h"
 #include "include/Robj.h"
+#include "include/ZSet.h"
 #include <arpa/inet.h>
 #include <bits/stdc++.h>
 #include <cstring>
@@ -22,12 +23,13 @@ Dict *dict = new Dict(128);
 
 enum ConnectionState { READING, WRITING, CLOSED };
 
-enum RequestType { GET, SET, DELETE, EXISTS, KEYS, UNKNOWN };
+enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, UNKNOWN };
 
 struct parsed_request {
   RequestType type;
   char *key;
-  char *value;
+  char *arg1;
+  char *arg2;
 };
 
 struct Response {
@@ -106,7 +108,8 @@ public:
     parsed_request p{};
     p.type = UNKNOWN;
     p.key = nullptr;
-    p.value = nullptr;
+    p.arg1 = nullptr;
+    p.arg2 = nullptr;
 
     vector<string> tokens = split_tokens(payload);
     if (tokens.empty())
@@ -115,8 +118,9 @@ public:
     const string &cmd = tokens[0];
 
     auto alloc_copy = [](const string &s) {
-      char *buf = (char *)malloc(s.size());
+      char *buf = (char *)malloc(s.size()+1);
       memcpy(buf, s.data(), s.size());
+      buf[s.size()] = '\0';
       return buf;
     };
 
@@ -127,7 +131,7 @@ public:
     } else if (cmd == "SET" && tokens.size() == 3) {
       p.type = SET;
       p.key = alloc_copy(tokens[1]);
-      p.value = alloc_copy(tokens[2]);
+      p.arg1 = alloc_copy(tokens[2]);
 
     } else if (cmd == "DELETE" && tokens.size() == 2) {
       p.type = DELETE;
@@ -138,6 +142,24 @@ public:
       p.key = alloc_copy(tokens[1]);
     } else if (cmd == "KEYS" && tokens.size() == 1) {
       p.type = KEYS;
+    } else if (cmd == "ZADD" && tokens.size() == 4) {
+      p.type = ZADD;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]);
+      p.arg2 = alloc_copy(tokens[3]); 
+    } else if (cmd == "ZREM" && tokens.size() == 3) {
+      p.type = ZREM;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]); 
+    } else if (cmd == "ZRANK" && tokens.size() == 3) {
+      p.type = ZRANK;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]); 
+    } else if (cmd == "ZRANGE" && tokens.size() == 4) {
+      p.type = ZRANGE;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]); 
+      p.arg2 = alloc_copy(tokens[3]); 
     }
 
     return p;
@@ -146,6 +168,10 @@ public:
   static Response process_request(parsed_request p) {
     Response r;
 
+    auto is_zset = [](HashEntry* e) {
+        return e && e->val->type == RobjType::OBJ_ZSET;
+    };
+
     switch (p.type) {
 
     case GET: {
@@ -153,13 +179,13 @@ public:
       if (!e) {
         r.payload = ser_nil();
       } else {
-        r.payload = ser_str(string((const char*)e->val->ptr, e->val->len));
+        r.payload = ser_str((const char*)e->val->ptr, e->val->len);
       }
       break;
     }
 
     case SET: {
-      dict->insert_into(p.key, strlen(p.key), p.value, strlen(p.value));
+      dict->insert_into(p.key, strlen(p.key), p.arg1, strlen(p.arg1));
       r.payload = ser_nil();
       break;
     }
@@ -181,9 +207,74 @@ public:
       r.payload = ser_arr(keys);
       break;
     }
+    case ZADD: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if (!e) {
+            dict->insert_into(p.key, strlen(p.key)); 
+            e = dict->find_from(p.key, strlen(p.key));
+        }
+        
+        if (!is_zset(e)) {
+            r.payload = ser_err(2, "WRONGTYPE Operation against a key holding the wrong kind of value");
+        } else {
+            ZSet* zset = (ZSet*)e->val->ptr;
+            bool new_elem = zset->zadd(p.arg2, strlen(p.arg2), p.arg1, strlen(p.arg1));
+            r.payload = ser_int(new_elem ? 1 : 0);
+        }
+        break;
+    }
+
+    case ZREM: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if (!e) {
+            r.payload = ser_int(0);
+        } else if (!is_zset(e)) {
+            r.payload = ser_err(2, "WRONGTYPE");
+        } else {
+            ZSet* zset = (ZSet*)e->val->ptr;
+            bool removed = zset->zrem(p.arg1, strlen(p.arg1));
+            r.payload = ser_int(removed ? 1 : 0);
+        }
+        break;
+    }
+
+    case ZRANK: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if (!e) {
+             r.payload = ser_nil();
+        } else if (!is_zset(e)) {
+            r.payload = ser_err(2, "WRONGTYPE");
+        } else {
+            ZSet* zset = (ZSet*)e->val->ptr;
+            int rank = zset->zrank(p.arg1, strlen(p.arg1));
+            if (rank == -1) r.payload = ser_nil();
+            else r.payload = ser_int(rank);
+        }
+        break;
+    }
+
+    case ZRANGE: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if (!e) {
+             r.payload = ser_nil(); 
+        } else if (!is_zset(e)) {
+            r.payload = ser_err(2, "WRONGTYPE");
+        } else {
+            ZSet* zset = (ZSet*)e->val->ptr;
+            int start = atoi(p.arg1);
+            int end = atoi(p.arg2);
+            vector<string> res = zset->zrange(start, end);
+            r.payload = ser_arr(res);
+        }
+        break;
+    }
     default:
       r.payload = ser_err(1, "Unknown cmd");
     }
+
+    if(p.key) free(p.key);
+    if(p.arg1) free(p.arg1);
+    if(p.arg2) free(p.arg2);
 
     return r;
   }
@@ -194,17 +285,23 @@ public:
 
   static string ser_nil() { return "(nil)"; }
 
-  static string ser_str(const string &s) { return "(str) " + s; }
+  static string ser_str(const char* buf, uint32_t len) {
+    string out = "(str) ";
+    out.append(buf, len); 
+    return out;
+  }
 
   static string ser_int(int v) { return "(int) " + to_string(v); }
 
   static string ser_arr(const vector<string> &elems) {
     string out = "(arr) len=" + to_string(elems.size()) + "\n";
-    for (auto &e : elems)
-      out += "(str) " + e + "\n";
+    for (auto &e : elems) {
+        out += ser_str(e.data(), e.size()) + "\n";  
+    }
     out += "(arr) end";
     return out;
   }
+
 
   int epollfd() const { return epoll_fd; }
   int fd() const { return listen_fd; }
@@ -224,7 +321,6 @@ public:
   void on_read(int epfd) {
     char buf[4096];
 
-    // drain socket
     while (true) {
       ssize_t n = read(fd, buf, sizeof(buf));
       if (n > 0) {
@@ -240,7 +336,6 @@ public:
       }
     }
 
-    // parse frames
     while (true) {
       if (read_buf.size() < 4)
         break;
@@ -264,11 +359,10 @@ public:
       parsed_request p = Server::parse_request(payload);
       Response response = Server::process_request(p);
       string &res = response.payload;
-      // send response
-      write_buf.resize(4 + res.size());
       len = res.size();
+      write_buf.resize(4 + len);
       memcpy(&write_buf[0], &len, 4);
-      memcpy(&write_buf[4], res.data(), res.size());
+      memcpy(&write_buf[4], res.data(), len);
 
       state = WRITING;
 
