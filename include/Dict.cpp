@@ -3,6 +3,8 @@
 #include "Dict.h"
 #include "hashmap.h"
 #include "Helper.h"
+#include <mutex>
+#include <shared_mutex>
 #include <sys/types.h>
 
 
@@ -21,30 +23,27 @@ void Dict::start_rehashing(){
 
 
 HashEntry* Dict::find_from(const char* key, uint32_t key_len){
+    shared_lock<shared_mutex> lk(dict_lock);   
 
     Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
-
     HashEntry* found = ht[0]->find(key_obj);
-
-    if(found){
-        decr_refcount(key_obj);
-        return found;
-    }
-    
-    if(ht[1]){
-        found = ht[1]->find(key_obj);
-    }
-
+    if(!found && ht[1]) found = ht[1]->find(key_obj);
     decr_refcount(key_obj);
 
-    if(found && found->expires_at != 0 && found->expires_at <= now_ns()){
+    if(found && found->expires_at != 0 && found->expires_at <= now_ns()) {
+        lk.unlock();                                   
+        unique_lock<shared_mutex> wlk(dict_lock);  
         erase_from(key, key_len);
         return nullptr;
     }
+
     return found;
 }
 
+
 bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len, uint64_t expiry) {
+    unique_lock<shared_mutex> lk(dict_lock);
+
     Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
     Robj* val_obj = create_obj(val, val_len, RobjType::OBJ_STRING);
  
@@ -70,6 +69,7 @@ bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint3
 }
 
 bool Dict::insert_into(const char* key, uint32_t key_len, uint64_t expiry){
+    unique_lock<shared_mutex> lk(dict_lock);
     Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
     Robj* val_obj = create_zset_obj();
 
@@ -95,6 +95,7 @@ bool Dict::insert_into(const char* key, uint32_t key_len, uint64_t expiry){
 }
 
 void Dict::set_expiry(const char* key, uint32_t key_len, uint64_t expiry_at_ns) {
+    unique_lock<shared_mutex> lk(dict_lock);
     HashEntry* e = find_from(key, key_len);
     if (e) {
         e->expires_at = expiry_at_ns;
@@ -110,6 +111,7 @@ uint64_t Dict::get_next_expiry() {
 }
 
 bool Dict::erase_from(const char* key, uint32_t len){
+    unique_lock<shared_mutex> lk(dict_lock); 
     if(rehash_idx!=-1){
         rehash();
     }
@@ -132,6 +134,7 @@ bool Dict::erase_from(const char* key, uint32_t len){
 }
 
 void Dict::rehash() {
+    unique_lock<shared_mutex> lk(dict_lock);
     if (rehash_idx == -1) return;
     int steps = 10;
     while(steps-- && rehash_idx < ht[0]->get_bucket_count()){
@@ -195,6 +198,7 @@ void Dict::get_all_keys(vector<string>& out) {
 }
 
 int Dict::active_expire() {
+    unique_lock<shared_mutex> lk(dict_lock);
     int n_expired = 0;
     uint64_t now = now_ns();
     

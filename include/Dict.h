@@ -1,4 +1,5 @@
 #pragma once
+#include <shared_mutex>
 #include <vector>
 #include <string>
 #include "Robj.h"
@@ -11,6 +12,8 @@ class Dict{
         HashTable* ht[2];
         Heap* heap;
         int rehash_idx;
+
+        mutable shared_mutex dict_lock;
 
     public:
         Dict(uint32_t init_buckets);
