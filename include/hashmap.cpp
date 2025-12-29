@@ -1,5 +1,6 @@
 #include "Robj.h"
 #include "hashmap.h"
+#include "Helper.h"
 #include <cstdint>
 #include <cstring>
 using namespace std;
@@ -26,18 +27,17 @@ HashTable::HashTable(uint32_t init_buckets){
 }
 
 HashTable::~HashTable(){
-    for(int i = 0; i<bucket_count; i++){
+    for(uint32_t i = 0; i < bucket_count; i++){
         HashEntry* e = table[i];
-
         while(e){
             HashEntry* next = e->next;
-            free(e->key);
-            free(e->val);
+            // WAS: free(e->key); free(e->val); <--- CAUSES SEGFAULT
+            decr_refcount(e->key); // Correct
+            decr_refcount(e->val); // Correct
             free(e);
             e = next;
         }
     }
-
     free(table);
 }
 
@@ -58,7 +58,7 @@ HashEntry* HashTable::find(Robj* key){
     return nullptr;
 }
 
-bool HashTable::insert(Robj* key, Robj* val){
+bool HashTable::insert(Robj* key, Robj* val, uint64_t expires_at){
     uint64_t table_key = hash((const char*)key->ptr, key->len);
     
     HashEntry* cur = table[table_key];
@@ -68,6 +68,7 @@ bool HashTable::insert(Robj* key, Robj* val){
             decr_refcount(cur->val);
             incr_refcount(val);
             cur->val = val;
+            cur->expires_at = expires_at ? expires_at : cur->expires_at;
             return true;
         }
         cur = cur->next;
@@ -88,6 +89,7 @@ bool HashTable::insert(Robj* key, Robj* val){
         incr_refcount(val);
         ptr->val = val;
         ptr->next = nullptr;
+        ptr->expires_at = expires_at;
         table[table_key] = ptr;
         return true;
     }
@@ -103,6 +105,7 @@ bool HashTable::insert(Robj* key, Robj* val){
     incr_refcount(val);
     newEntry->val = val;
     newEntry->next = ptr;
+    newEntry->expires_at = expires_at;
     table[table_key] = newEntry;
     size++;
     return true;

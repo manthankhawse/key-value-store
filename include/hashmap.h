@@ -9,6 +9,7 @@ struct HashEntry{
     Robj* key;
     Robj* val;
     struct HashEntry* next;
+    uint64_t expires_at;
 };
 
 class HashTable{
@@ -29,7 +30,7 @@ class HashTable{
 
     HashEntry* find(Robj* key);
 
-    bool insert(Robj* key, Robj* val);
+    bool insert(Robj* key, Robj* val, uint64_t expiry=0);
 
     bool erase(Robj* key);
 

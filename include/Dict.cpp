@@ -1,12 +1,15 @@
+#include "Heap.h"
 #include "Robj.h"
 #include "Dict.h"
 #include "hashmap.h"
+#include "Helper.h"
 #include <sys/types.h>
 
 
 Dict::Dict(uint32_t init_buckets){
     ht[0] = new HashTable(init_buckets);
     ht[1] = nullptr;
+    heap = new Heap();
     rehash_idx = -1;
 }
 
@@ -33,69 +36,77 @@ HashEntry* Dict::find_from(const char* key, uint32_t key_len){
     }
 
     decr_refcount(key_obj);
+
+    if(found && found->expires_at != 0 && found->expires_at <= now_ns()){
+        erase_from(key, key_len);
+        return nullptr;
+    }
     return found;
 }
 
-bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len) {
-
+bool Dict::insert_into(const char* key, uint32_t key_len, const char* val, uint32_t val_len, uint64_t expiry) {
     Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
     Robj* val_obj = create_obj(val, val_len, RobjType::OBJ_STRING);
  
-    if (rehash_idx != -1) {
-        rehash();
-    }
+    if (rehash_idx != -1) rehash();
  
+    bool success = false;
     if (rehash_idx != -1) { 
         ht[0]->erase(key_obj);
- 
-        bool ok = ht[1]->insert(key_obj, val_obj);
-        decr_refcount(key_obj);
-        decr_refcount(val_obj);
-
-        return ok;
+        success = ht[1]->insert(key_obj, val_obj, expiry);
+    } else {
+        success = ht[0]->insert(key_obj, val_obj, expiry);
     }
- 
-    bool success = ht[0]->insert(key_obj, val_obj);
+
+    if (success && expiry > 0) {
+        heap->push(key_obj, expiry);
+    }
 
     decr_refcount(key_obj);
     decr_refcount(val_obj);
     
-    if (should_start_rehashing()) {
-        start_rehashing();
-    }
-
+    if (should_start_rehashing()) start_rehashing();
     return success;
 }
 
-bool Dict::insert_into(const char* key, uint32_t key_len){
+bool Dict::insert_into(const char* key, uint32_t key_len, uint64_t expiry){
     Robj* key_obj = create_obj(key, key_len, RobjType::OBJ_STRING);
     Robj* val_obj = create_zset_obj();
 
-    if (rehash_idx != -1) {
-        rehash();
-    }
+    if (rehash_idx != -1) rehash();
  
+    bool success = false;
     if (rehash_idx != -1) { 
         ht[0]->erase(key_obj);
- 
-        bool ok = ht[1]->insert(key_obj, val_obj);
-        decr_refcount(key_obj);
-        decr_refcount(val_obj);
-
-        return ok;
+        success = ht[1]->insert(key_obj, val_obj, expiry);
+    } else {
+        success = ht[0]->insert(key_obj, val_obj, expiry);
     }
- 
-    bool success = ht[0]->insert(key_obj, val_obj);
+
+    if (success && expiry > 0) {
+        heap->push(key_obj, expiry);
+    }
 
     decr_refcount(key_obj);
     decr_refcount(val_obj);
     
-    if (should_start_rehashing()) {
-        start_rehashing();
-    }
-
+    if (should_start_rehashing()) start_rehashing();
     return success;
+}
 
+void Dict::set_expiry(const char* key, uint32_t key_len, uint64_t expiry_at_ns) {
+    HashEntry* e = find_from(key, key_len);
+    if (e) {
+        e->expires_at = expiry_at_ns;
+        Robj* k = create_obj(key, key_len, RobjType::OBJ_STRING);
+        heap->push(k, expiry_at_ns);
+        decr_refcount(k);
+    }
+}
+
+uint64_t Dict::get_next_expiry() {
+    HeapItem* item = heap->top();
+    return item ? item->expires_at : 0;
 }
 
 bool Dict::erase_from(const char* key, uint32_t len){
@@ -122,9 +133,22 @@ bool Dict::erase_from(const char* key, uint32_t len){
 
 void Dict::rehash() {
     if (rehash_idx == -1) return;
+    int steps = 10;
+    while(steps-- && rehash_idx < ht[0]->get_bucket_count()){
+        while (rehash_idx < ht[0]->get_bucket_count() && ht[0]->bucket_at_idx(rehash_idx) == nullptr) {
+            rehash_idx++;
+        }
+        if (rehash_idx == ht[0]->get_bucket_count()) break;
 
-    while (rehash_idx < ht[0]->get_bucket_count() &&
-           ht[0]->bucket_at_idx(rehash_idx) == nullptr) {
+        HashEntry* e = ht[0]->bucket_at_idx(rehash_idx);
+        ht[0]->set_null(rehash_idx);
+        while (e) {
+            HashEntry* next = e->next;
+            e->next = nullptr;          
+            ht[1]->insert_entry(e);    
+            ht[0]->decrement_size();
+            e = next;
+        }
         rehash_idx++;
     }
 
@@ -133,23 +157,8 @@ void Dict::rehash() {
         ht[0] = ht[1];
         ht[1] = nullptr;
         rehash_idx = -1;
-        return;
     }
-
-    HashEntry* e = ht[0]->bucket_at_idx(rehash_idx);
-    ht[0]->set_null(rehash_idx);
-
-    while (e) {
-        HashEntry* next = e->next;
-        e->next = nullptr;          
-        ht[1]->insert_entry(e);    
-        ht[0]->decrement_size();
-        e = next;
-    }
-
-    rehash_idx++;
 }
-
 
 bool Dict::should_start_rehashing(){
     return ht[0]->count() >= ht[0]->get_bucket_count();
@@ -185,9 +194,39 @@ void Dict::get_all_keys(vector<string>& out) {
     }
 }
 
+int Dict::active_expire() {
+    int n_expired = 0;
+    uint64_t now = now_ns();
+    
+    int max_cycles = 100; 
+
+    while (max_cycles--) {
+        HeapItem* item = heap->top();
+        if (!item || item->expires_at > now) break;
+
+        item = heap->pop();
+
+        HashEntry* e = ht[0]->find(item->key);
+        if (!e && ht[1]) e = ht[1]->find(item->key);
+
+        if (e) {
+            if (e->expires_at != 0 && e->expires_at <= now) {
+                erase_from((const char*)item->key->ptr, item->key->len);
+                n_expired++;
+            }
+        }
+
+        decr_refcount(item->key);
+        free(item);
+    }
+
+    return n_expired;
+}
+
 
 Dict::~Dict(){
     delete ht[0];
     delete ht[1];
+    delete heap;
 }
 

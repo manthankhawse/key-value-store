@@ -2,6 +2,7 @@
 #include "include/hashmap.h"
 #include "include/Robj.h"
 #include "include/ZSet.h"
+#include "include/Helper.h"
 #include <arpa/inet.h>
 #include <bits/stdc++.h>
 #include <cstring>
@@ -23,7 +24,7 @@ Dict *dict = new Dict(128);
 
 enum ConnectionState { READING, WRITING, CLOSED };
 
-enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, UNKNOWN };
+enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, EXPIRE, PERSIST, TTL, UNKNOWN };
 
 struct parsed_request {
   RequestType type;
@@ -127,21 +128,28 @@ public:
     if (cmd == "GET" && tokens.size() == 2) {
       p.type = GET;
       p.key = alloc_copy(tokens[1]);
-
     } else if (cmd == "SET" && tokens.size() == 3) {
       p.type = SET;
       p.key = alloc_copy(tokens[1]);
       p.arg1 = alloc_copy(tokens[2]);
-
     } else if (cmd == "DELETE" && tokens.size() == 2) {
       p.type = DELETE;
       p.key = alloc_copy(tokens[1]);
-
     } else if (cmd == "EXISTS" && tokens.size() == 2) {
       p.type = EXISTS;
       p.key = alloc_copy(tokens[1]);
     } else if (cmd == "KEYS" && tokens.size() == 1) {
       p.type = KEYS;
+    } else if (cmd == "EXPIRE" && tokens.size() == 3) { 
+      p.type = EXPIRE; 
+      p.key = alloc_copy(tokens[1]); 
+      p.arg1 = alloc_copy(tokens[2]); 
+    } else if (cmd == "TTL" && tokens.size() == 2) { 
+      p.type = TTL; 
+      p.key = alloc_copy(tokens[1]); 
+    } else if (cmd == "PERSIST" && tokens.size() == 2) { 
+      p.type = PERSIST; 
+      p.key = alloc_copy(tokens[1]); 
     } else if (cmd == "ZADD" && tokens.size() == 4) {
       p.type = ZADD;
       p.key = alloc_copy(tokens[1]);
@@ -194,6 +202,49 @@ public:
       bool ok = dict->erase_from(p.key, strlen(p.key));
       r.payload = ser_int(ok ? 1 : 0);
       break;
+    }
+
+    case EXPIRE: {
+        try {
+            uint64_t sec = std::stoull(p.arg1);
+            uint64_t ns_at = now_ns() + (sec * 1000000000ULL);
+            dict->set_expiry(p.key, strlen(p.key), ns_at);
+            r.payload = ser_int(1);
+        } catch (...) {
+            r.payload = ser_err(3, "ERR value is not an integer or out of range");
+        }
+        break;
+    }
+
+    case TTL: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if(!e) {
+            r.payload = ser_int(-2); 
+        } else if (e->expires_at == 0) {
+            r.payload = ser_int(-1);  
+        } else {
+            uint64_t now = now_ns();
+            if (now >= e->expires_at) {
+                r.payload = ser_int(-2);
+            } else {
+                long long remaining = (e->expires_at - now) / 1000000000ULL;
+                r.payload = ser_int(remaining);
+            }
+        }
+        break;
+    }
+
+    case PERSIST: {
+        HashEntry* e = dict->find_from(p.key, strlen(p.key));
+        if (!e) {
+            r.payload = ser_int(0);
+        } else if (e->expires_at == 0) {
+            r.payload = ser_int(0); 
+        } else {
+            dict->set_expiry(p.key, strlen(p.key), 0);
+            r.payload = ser_int(1);
+        }
+        break;
     }
 
     case EXISTS: {
@@ -425,7 +476,18 @@ int main() {
     return 1;
 
   while (true) {
-    int n = epoll_wait(server.epollfd(), server.get_events(), MAX_EVENTS, -1);
+    dict->active_expire();
+
+    int timeout = -1;
+    uint64_t next_expiry = dict->get_next_expiry();
+    if (next_expiry > 0) {
+        uint64_t now = now_ns();
+        if (next_expiry <= now) timeout = 0;  
+        else timeout = (next_expiry - now) / 1000000; 
+    }
+    
+    if (timeout == -1 || timeout > 100) timeout = 100;
+    int n = epoll_wait(server.epollfd(), server.get_events(), MAX_EVENTS, timeout);
 
     for (int i = 0; i < n; i++) {
       int fd = server.get_events()[i].data.fd;
