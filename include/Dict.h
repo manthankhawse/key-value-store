@@ -1,5 +1,4 @@
 #pragma once
-#include <shared_mutex>
 #include <vector>
 #include <string>
 #include "Robj.h"
@@ -13,7 +12,6 @@ class Dict{
         Heap* heap;
         int rehash_idx;
 
-        mutable shared_mutex dict_lock;
 
     public:
         Dict(uint32_t init_buckets);
@@ -28,6 +26,7 @@ class Dict{
         bool should_start_rehashing();
         void set_expiry(const char* key, uint32_t key_len, uint64_t expiry_at_ns);
         int active_expire();  
+        int count_keys();
         uint64_t get_next_expiry();
 };
 

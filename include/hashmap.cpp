@@ -8,7 +8,7 @@ using namespace std;
 static uint64_t hash_helper(const char* key , uint32_t key_len){
     uint64_t h = 1469598103934665603ULL;
 
-    for(int i = 0; i<key_len; i++){
+    for(uint32_t i = 0; i<key_len; i++){
         h^=(uint8_t)key[i];
         h *= 1099511628211ULL;
     }

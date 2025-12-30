@@ -104,53 +104,52 @@ cout << "Server says:\n" << payload << endl;
         }
     }
 };
-
 int main() {
     Client client;
     if (!client.connect_to_server("127.0.0.1", 1234))
         return 1;
 
-    // client.send_message("SET foo bar");
+    cout << "\n======= BASIC STRING COMMANDS =======\n";
+    client.send_message("SET foo bar");
     client.send_message("GET foo");
-    
-    // cout << "\n--- ZSet Tests ---\n";
-    
-    // client.send_message("ZADD scores 100.5 alice");
-    // client.send_message("ZADD scores 200.0 bob");
-    // client.send_message("ZADD scores 50.0 charlie");
-    
-    // cout << "Checking Rank for Alice (expect 1):" << endl;
-    // client.send_message("ZRANK scores alice");
+    client.send_message("EXISTS foo");
+    client.send_message("DELETE foo");
+    client.send_message("EXISTS foo");
+    client.send_message("KEYS");
 
-    // cout << "Getting all scores (0 to -1 implies all):" << endl;
-    // client.send_message("ZRANGE scores 0 5");
+    cout << "\n======= TTL / EXPIRY COMMANDS =======\n";
+    client.send_message("SET temp hello");
+    client.send_message("EXPIRE temp 2");
+    client.send_message("TTL temp");
+    sleep(3);
+    client.send_message("GET temp");    // nil after expire
 
-    // client.send_message("ZREM scores alice");
-    
-    // cout << "Checking Range after Delete:" << endl;
-    // client.send_message("ZRANGE scores 0 5");
+    cout << "\n--- PERSIST removes expiry ---\n";
+    client.send_message("SET perm_key stable");
+    client.send_message("EXPIRE perm_key 2");
+    client.send_message("PERSIST perm_key");
+    sleep(3);
+    client.send_message("TTL perm_key"); // -1 means no expiry
+    client.send_message("GET perm_key"); // stable
 
-    // cout << "--- 1. Basic Expiry Test ---" << endl;
-    // client.send_message("SET temp_key hello");
-    // client.send_message("EXPIRE temp_key 1"); // Expire in 1 sec
-    // client.send_message("TTL temp_key");      // Should be ~1
-    // sleep(2);
-    // client.send_message("GET temp_key");      // Should be (nil)
 
-    // cout << "--- 2. Testing PERSIST (0 = No Expiry) ---" << endl;
-    // client.send_message("SET perm_key stable");
-    // client.send_message("EXPIRE perm_key 2"); // Set to die in 2s
-    // client.send_message("TTL perm_key");
-    
-    // // SAVE IT! Set expires_at = 0
-    // client.send_message("PERSIST perm_key"); 
-    
-    // cout << "Sleeping 3 seconds (longer than original TTL)..." << endl;
-    // sleep(3);
-    
-    // // If logic holds, key should still be here
-    // client.send_message("TTL perm_key");      // Should be -1 (No Expiry)
-    // client.send_message("GET perm_key");      // Should be "(str) stable"
+    cout << "\n======= SORTED SET COMMANDS =======\n";
+    client.send_message("ZADD scores 100 alice");
+    client.send_message("ZADD scores 200 bob");
+    client.send_message("ZADD scores 150 charlie");
+    client.send_message("ZRANK scores alice");
+    client.send_message("ZRANK scores charlie");
+    client.send_message("ZREM scores bob");
+    client.send_message("ZRANGE scores 0 5");
+
+    cout << "\n======= INFO METRICS =======\n";
+    client.send_message("INFO");
+
+    cout << "\n======= PIPELINING TEST =======\n";
+    client.send_message("SET a 1");
+    client.send_message("SET b 2");
+    client.send_message("SET c 3");
+    client.send_message("KEYS");
 
 
     client.close_connection();

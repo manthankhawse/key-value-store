@@ -20,6 +20,12 @@
 
 using namespace std;
 
+uint64_t g_start_time_ns = now_ns();
+uint64_t g_total_commands = 0;
+uint64_t g_last_ops_time_ns = 0;
+uint64_t g_last_ops_count = 0;
+uint64_t g_ops_per_sec = 0;
+
 int aof_fd = -1;
 
 bool aof_loading = false;
@@ -41,6 +47,7 @@ enum RequestType {
   EXPIRE,
   PERSIST,
   TTL,
+  INFO,
   UNKNOWN,
   PEXPIREAT
 };
@@ -49,7 +56,10 @@ volatile sig_atomic_t g_running = 1;
 
 uint64_t last_fsync = 0;
 
-void signal_handler(int signum) { g_running = 0; }
+void signal_handler(int signum) {
+  (void)signum;
+  g_running = 0; 
+}
 
 struct parsed_request {
   RequestType type;
@@ -74,7 +84,9 @@ private:
     istringstream iss(s);
     string tok;
     while (iss >> tok) {
-      tokens.push_back(tok);
+        if (!tok.empty() && tok.back() == '\r')
+            tok.pop_back();
+        tokens.push_back(tok);
     }
     return tokens;
   }
@@ -172,6 +184,8 @@ public:
     } else if (cmd == "TTL" && tokens.size() == 2) {
       p.type = TTL;
       p.key = alloc_copy(tokens[1]);
+    } else if (cmd == "INFO" && tokens.size() == 1) {
+      p.type = INFO;
     } else if (cmd == "PERSIST" && tokens.size() == 2) {
       p.type = PERSIST;
       p.key = alloc_copy(tokens[1]);
@@ -242,8 +256,7 @@ public:
         uint64_t ns_at = now_ns() + (sec * 1000000000ULL);
         dict->set_expiry(p.key, strlen(p.key), ns_at);
         if (!aof_loading) {
-          aof_append("PEXPIREAT " + string(p.key) + " " +
-                     to_string(ns_at));
+          aof_append("PEXPIREAT " + string(p.key) + " " + to_string(ns_at));
         }
         r.payload = ser_int(1);
       } catch (...) {
@@ -375,6 +388,34 @@ public:
       }
       break;
     }
+
+    case INFO: {
+      uint64_t now = now_ns();
+
+      // calculate ops/sec approx every second
+      if (now - g_last_ops_time_ns >= 1000000000ULL) {
+        uint64_t diff = g_total_commands - g_last_ops_count;
+        g_ops_per_sec = diff;
+        g_last_ops_count = g_total_commands;
+        g_last_ops_time_ns = now;
+      }
+
+      int key_count = dict->count_keys(); // we write this next
+
+      std::ostringstream out;
+      out << "# Server\n";
+      out << "uptime_sec:" << ((now - g_start_time_ns) / 1000000000ULL) << "\n";
+      out << "aof_enabled:" << (aof_fd >= 0 ? 1 : 0) << "\n";
+
+      out << "# Stats\n";
+      out << "total_commands_processed:" << g_total_commands << "\n";
+      out << "ops_per_sec:" << g_ops_per_sec << "\n";
+      out << "key_count:" << key_count << "\n";
+
+      r.payload = "(info)\n" + out.str();
+      break;
+    }
+
     default:
       r.payload = ser_err(1, "Unknown cmd");
     }
@@ -385,6 +426,8 @@ public:
       free(p.arg1);
     if (p.arg2)
       free(p.arg2);
+
+    g_total_commands++;
 
     return r;
   }
