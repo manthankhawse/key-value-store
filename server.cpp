@@ -31,6 +31,12 @@ enum ConnectionState { READING, WRITING, CLOSED };
 
 enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, EXPIRE, PERSIST, TTL, UNKNOWN, PEXPIREAT };
 
+volatile sig_atomic_t g_running = 1;
+
+void signal_handler(int signum) {
+    g_running = 0;
+}
+
 struct parsed_request {
   RequestType type;
   char *key;
@@ -156,8 +162,9 @@ public:
       p.type = PERSIST; 
       p.key = alloc_copy(tokens[1]); 
     } else if(cmd == "PEXPIREAT" && tokens.size()==2){
-      p.type = PEXPIREAT;
-      p.key = alloc_copy(tokens[1]);
+      p.type = PEXPIREAT; 
+      p.key = alloc_copy(tokens[1]); 
+      p.arg1 = alloc_copy(p.arg1);
     } else if (cmd == "ZADD" && tokens.size() == 4) {
       p.type = ZADD;
       p.key = alloc_copy(tokens[1]);
@@ -413,6 +420,18 @@ public:
     aof_loading = false;
   }
 
+  void shutdown() {
+      if (listen_fd != -1) {
+          close(listen_fd);
+          listen_fd = -1;
+      }
+      if (epoll_fd != -1) {
+          close(epoll_fd);
+          epoll_fd = -1;
+      }
+      cout << "[Server] Stopped listening." << endl;
+  }
+
 
 
   int epollfd() const { return epoll_fd; }
@@ -532,6 +551,8 @@ public:
 unordered_map<int, Connection *> connection_map;
 
 int main() {
+  signal(SIGINT, signal_handler);
+  signal(SIGTERM, signal_handler);
   Server server;
   aof_fd = open("appendonly.aof", O_CREAT | O_WRONLY | O_APPEND, 0644);
   if (aof_fd < 0) {
@@ -544,7 +565,7 @@ int main() {
   if (server.init(1234) < 0)
     return 1;
 
-  while (true) {
+  while (g_running) {
     dict->active_expire();
 
     int timeout = -1;
@@ -557,6 +578,10 @@ int main() {
     
     if (timeout == -1 || timeout > 100) timeout = 100;
     int n = epoll_wait(server.epollfd(), server.get_events(), MAX_EVENTS, timeout);
+
+    if (n < 0 && errno == EINTR) {
+        continue; // Check g_running loop condition
+    }
 
     for (int i = 0; i < n; i++) {
       int fd = server.get_events()[i].data.fd;
@@ -574,4 +599,25 @@ int main() {
       }
     }
   }
+
+  cout << "\n[Server] Shutting down gracefully..." << endl;
+
+  server.shutdown();
+
+  if (aof_fd != -1) {
+      close(aof_fd);
+      cout << "[Server] AOF closed." << endl;
+  }
+ 
+  for (auto &pair : connection_map) {
+      close(pair.first); 
+      delete pair.second;  
+  }
+  connection_map.clear();
+  cout << "[Server] Clients disconnected." << endl;
+ 
+  delete dict;
+  cout << "[Server] Memory freed. Bye!" << endl;
+
+  return 0;
 }
