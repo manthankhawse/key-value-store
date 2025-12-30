@@ -20,11 +20,16 @@
 
 using namespace std;
 
+
+int aof_fd = -1;
+
+bool aof_loading = false;
+
 Dict *dict = new Dict(128);
 
 enum ConnectionState { READING, WRITING, CLOSED };
 
-enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, EXPIRE, PERSIST, TTL, UNKNOWN };
+enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, EXPIRE, PERSIST, TTL, UNKNOWN, PEXPIREAT };
 
 struct parsed_request {
   RequestType type;
@@ -150,6 +155,9 @@ public:
     } else if (cmd == "PERSIST" && tokens.size() == 2) { 
       p.type = PERSIST; 
       p.key = alloc_copy(tokens[1]); 
+    } else if(cmd == "PEXPIREAT" && tokens.size()==2){
+      p.type = PEXPIREAT;
+      p.key = alloc_copy(tokens[1]);
     } else if (cmd == "ZADD" && tokens.size() == 4) {
       p.type = ZADD;
       p.key = alloc_copy(tokens[1]);
@@ -194,27 +202,44 @@ public:
 
     case SET: {
       dict->insert_into(p.key, strlen(p.key), p.arg1, strlen(p.arg1));
+      aof_append("SET " + string(p.key) + " " + p.arg1);
       r.payload = ser_nil();
       break;
     }
 
     case DELETE: {
       bool ok = dict->erase_from(p.key, strlen(p.key));
+      if (ok)
+        aof_append("DEL " + string(p.key));
       r.payload = ser_int(ok ? 1 : 0);
       break;
     }
 
     case EXPIRE: {
         try {
-            uint64_t sec = std::stoull(p.arg1);
+            uint64_t sec = stoull(p.arg1);
             uint64_t ns_at = now_ns() + (sec * 1000000000ULL);
             dict->set_expiry(p.key, strlen(p.key), ns_at);
+            if (!aof_loading) {
+              aof_append("PEXPIREAT " + std::string(p.key) + " " + std::to_string(ns_at));
+            }
             r.payload = ser_int(1);
         } catch (...) {
             r.payload = ser_err(3, "ERR value is not an integer or out of range");
         }
         break;
     }
+    case PEXPIREAT: {
+    uint64_t ns_at = std::stoull(p.arg1);
+    dict->set_expiry(p.key, strlen(p.key), ns_at);
+
+    if (!aof_loading) {
+        aof_append("PEXPIREAT " + std::string(p.key) + " " + p.arg1);
+    }
+
+    r.payload = ser_int(1);
+    break;
+}
 
     case TTL: {
         HashEntry* e = dict->find_from(p.key, strlen(p.key));
@@ -270,6 +295,7 @@ public:
         } else {
             ZSet* zset = (ZSet*)e->val->ptr;
             bool new_elem = zset->zadd(p.arg2, strlen(p.arg2), p.arg1, strlen(p.arg1));
+            if (new_elem) aof_append("ZADD " + string(p.key) + " " + p.arg1 + " " + p.arg2);
             r.payload = ser_int(new_elem ? 1 : 0);
         }
         break;
@@ -352,6 +378,41 @@ public:
     out += "(arr) end";
     return out;
   }
+
+  static void aof_append(const string &raw_cmd) {
+    if (aof_loading) return;
+    if (aof_fd < 0) return;
+    string line = raw_cmd + "\n";
+    write(aof_fd, line.data(), line.size());
+  }
+
+  static void aof_replay() {
+    aof_loading = true;
+    ifstream in("appendonly.aof");
+    if (!in.is_open()) {
+        cerr << "[AOF] no file found, skipping replay\n";
+        return;
+    }
+
+    string line;
+    while (getline(in, line)) {
+        if (line.empty())
+            continue;
+
+        parsed_request p = Server::parse_request(line);
+
+        if (p.type == UNKNOWN) {
+            cerr << "[AOF] ignoring unknown command: " << line << "\n";
+            continue;
+        }
+
+        Response r = Server::process_request(p);
+    }
+
+    cerr << "[AOF] replay finished\n";
+    aof_loading = false;
+  }
+
 
 
   int epollfd() const { return epoll_fd; }
@@ -472,6 +533,14 @@ unordered_map<int, Connection *> connection_map;
 
 int main() {
   Server server;
+  aof_fd = open("appendonly.aof", O_CREAT | O_WRONLY | O_APPEND, 0644);
+  if (aof_fd < 0) {
+    perror("open AOF");
+    return 1;
+  }
+
+  Server::aof_replay();
+
   if (server.init(1234) < 0)
     return 1;
 

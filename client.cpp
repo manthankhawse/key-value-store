@@ -110,47 +110,47 @@ int main() {
     if (!client.connect_to_server("127.0.0.1", 1234))
         return 1;
 
-    client.send_message("SET foo bar");
+    // client.send_message("SET foo bar");
     client.send_message("GET foo");
     
-    cout << "\n--- ZSet Tests ---\n";
+    // cout << "\n--- ZSet Tests ---\n";
     
-    client.send_message("ZADD scores 100.5 alice");
-    client.send_message("ZADD scores 200.0 bob");
-    client.send_message("ZADD scores 50.0 charlie");
+    // client.send_message("ZADD scores 100.5 alice");
+    // client.send_message("ZADD scores 200.0 bob");
+    // client.send_message("ZADD scores 50.0 charlie");
     
-    cout << "Checking Rank for Alice (expect 1):" << endl;
-    client.send_message("ZRANK scores alice");
+    // cout << "Checking Rank for Alice (expect 1):" << endl;
+    // client.send_message("ZRANK scores alice");
 
-    cout << "Getting all scores (0 to -1 implies all):" << endl;
-    client.send_message("ZRANGE scores 0 5");
+    // cout << "Getting all scores (0 to -1 implies all):" << endl;
+    // client.send_message("ZRANGE scores 0 5");
 
-    client.send_message("ZREM scores alice");
+    // client.send_message("ZREM scores alice");
     
-    cout << "Checking Range after Delete:" << endl;
-    client.send_message("ZRANGE scores 0 5");
+    // cout << "Checking Range after Delete:" << endl;
+    // client.send_message("ZRANGE scores 0 5");
 
-    cout << "--- 1. Basic Expiry Test ---" << endl;
-    client.send_message("SET temp_key hello");
-    client.send_message("EXPIRE temp_key 1"); // Expire in 1 sec
-    client.send_message("TTL temp_key");      // Should be ~1
-    sleep(2);
-    client.send_message("GET temp_key");      // Should be (nil)
+    // cout << "--- 1. Basic Expiry Test ---" << endl;
+    // client.send_message("SET temp_key hello");
+    // client.send_message("EXPIRE temp_key 1"); // Expire in 1 sec
+    // client.send_message("TTL temp_key");      // Should be ~1
+    // sleep(2);
+    // client.send_message("GET temp_key");      // Should be (nil)
 
-    cout << "--- 2. Testing PERSIST (0 = No Expiry) ---" << endl;
-    client.send_message("SET perm_key stable");
-    client.send_message("EXPIRE perm_key 2"); // Set to die in 2s
-    client.send_message("TTL perm_key");
+    // cout << "--- 2. Testing PERSIST (0 = No Expiry) ---" << endl;
+    // client.send_message("SET perm_key stable");
+    // client.send_message("EXPIRE perm_key 2"); // Set to die in 2s
+    // client.send_message("TTL perm_key");
     
-    // SAVE IT! Set expires_at = 0
-    client.send_message("PERSIST perm_key"); 
+    // // SAVE IT! Set expires_at = 0
+    // client.send_message("PERSIST perm_key"); 
     
-    cout << "Sleeping 3 seconds (longer than original TTL)..." << endl;
-    sleep(3);
+    // cout << "Sleeping 3 seconds (longer than original TTL)..." << endl;
+    // sleep(3);
     
-    // If logic holds, key should still be here
-    client.send_message("TTL perm_key");      // Should be -1 (No Expiry)
-    client.send_message("GET perm_key");      // Should be "(str) stable"
+    // // If logic holds, key should still be here
+    // client.send_message("TTL perm_key");      // Should be -1 (No Expiry)
+    // client.send_message("GET perm_key");      // Should be "(str) stable"
 
 
     client.close_connection();
