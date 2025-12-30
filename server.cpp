@@ -1,8 +1,8 @@
 #include "include/Dict.h"
-#include "include/hashmap.h"
+#include "include/Helper.h"
 #include "include/Robj.h"
 #include "include/ZSet.h"
-#include "include/Helper.h"
+#include "include/hashmap.h"
 #include <arpa/inet.h>
 #include <bits/stdc++.h>
 #include <cstring>
@@ -20,7 +20,6 @@
 
 using namespace std;
 
-
 int aof_fd = -1;
 
 bool aof_loading = false;
@@ -29,13 +28,28 @@ Dict *dict = new Dict(128);
 
 enum ConnectionState { READING, WRITING, CLOSED };
 
-enum RequestType { GET, SET, DELETE, EXISTS, KEYS, ZADD, ZREM, ZRANK, ZRANGE, EXPIRE, PERSIST, TTL, UNKNOWN, PEXPIREAT };
+enum RequestType {
+  GET,
+  SET,
+  DELETE,
+  EXISTS,
+  KEYS,
+  ZADD,
+  ZREM,
+  ZRANK,
+  ZRANGE,
+  EXPIRE,
+  PERSIST,
+  TTL,
+  UNKNOWN,
+  PEXPIREAT
+};
 
 volatile sig_atomic_t g_running = 1;
 
-void signal_handler(int signum) {
-    g_running = 0;
-}
+uint64_t last_fsync = 0;
+
+void signal_handler(int signum) { g_running = 0; }
 
 struct parsed_request {
   RequestType type;
@@ -130,7 +144,7 @@ public:
     const string &cmd = tokens[0];
 
     auto alloc_copy = [](const string &s) {
-      char *buf = (char *)malloc(s.size()+1);
+      char *buf = (char *)malloc(s.size() + 1);
       memcpy(buf, s.data(), s.size());
       buf[s.size()] = '\0';
       return buf;
@@ -151,38 +165,38 @@ public:
       p.key = alloc_copy(tokens[1]);
     } else if (cmd == "KEYS" && tokens.size() == 1) {
       p.type = KEYS;
-    } else if (cmd == "EXPIRE" && tokens.size() == 3) { 
-      p.type = EXPIRE; 
-      p.key = alloc_copy(tokens[1]); 
-      p.arg1 = alloc_copy(tokens[2]); 
-    } else if (cmd == "TTL" && tokens.size() == 2) { 
-      p.type = TTL; 
-      p.key = alloc_copy(tokens[1]); 
-    } else if (cmd == "PERSIST" && tokens.size() == 2) { 
-      p.type = PERSIST; 
-      p.key = alloc_copy(tokens[1]); 
-    } else if(cmd == "PEXPIREAT" && tokens.size()==2){
-      p.type = PEXPIREAT; 
-      p.key = alloc_copy(tokens[1]); 
-      p.arg1 = alloc_copy(p.arg1);
+    } else if (cmd == "EXPIRE" && tokens.size() == 3) {
+      p.type = EXPIRE;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]);
+    } else if (cmd == "TTL" && tokens.size() == 2) {
+      p.type = TTL;
+      p.key = alloc_copy(tokens[1]);
+    } else if (cmd == "PERSIST" && tokens.size() == 2) {
+      p.type = PERSIST;
+      p.key = alloc_copy(tokens[1]);
+    } else if (cmd == "PEXPIREAT" && tokens.size() == 3) {
+      p.type = PEXPIREAT;
+      p.key = alloc_copy(tokens[1]);
+      p.arg1 = alloc_copy(tokens[2]);
     } else if (cmd == "ZADD" && tokens.size() == 4) {
       p.type = ZADD;
       p.key = alloc_copy(tokens[1]);
       p.arg1 = alloc_copy(tokens[2]);
-      p.arg2 = alloc_copy(tokens[3]); 
+      p.arg2 = alloc_copy(tokens[3]);
     } else if (cmd == "ZREM" && tokens.size() == 3) {
       p.type = ZREM;
       p.key = alloc_copy(tokens[1]);
-      p.arg1 = alloc_copy(tokens[2]); 
+      p.arg1 = alloc_copy(tokens[2]);
     } else if (cmd == "ZRANK" && tokens.size() == 3) {
       p.type = ZRANK;
       p.key = alloc_copy(tokens[1]);
-      p.arg1 = alloc_copy(tokens[2]); 
+      p.arg1 = alloc_copy(tokens[2]);
     } else if (cmd == "ZRANGE" && tokens.size() == 4) {
       p.type = ZRANGE;
       p.key = alloc_copy(tokens[1]);
-      p.arg1 = alloc_copy(tokens[2]); 
-      p.arg2 = alloc_copy(tokens[3]); 
+      p.arg1 = alloc_copy(tokens[2]);
+      p.arg2 = alloc_copy(tokens[3]);
     }
 
     return p;
@@ -191,8 +205,8 @@ public:
   static Response process_request(parsed_request p) {
     Response r;
 
-    auto is_zset = [](HashEntry* e) {
-        return e && e->val->type == RobjType::OBJ_ZSET;
+    auto is_zset = [](HashEntry *e) {
+      return e && e->val->type == RobjType::OBJ_ZSET;
     };
 
     switch (p.type) {
@@ -202,7 +216,7 @@ public:
       if (!e) {
         r.payload = ser_nil();
       } else {
-        r.payload = ser_str((const char*)e->val->ptr, e->val->len);
+        r.payload = ser_str((const char *)e->val->ptr, e->val->len);
       }
       break;
     }
@@ -217,66 +231,70 @@ public:
     case DELETE: {
       bool ok = dict->erase_from(p.key, strlen(p.key));
       if (ok)
-        aof_append("DEL " + string(p.key));
+        aof_append("DELETE " + string(p.key));
       r.payload = ser_int(ok ? 1 : 0);
       break;
     }
 
     case EXPIRE: {
-        try {
-            uint64_t sec = stoull(p.arg1);
-            uint64_t ns_at = now_ns() + (sec * 1000000000ULL);
-            dict->set_expiry(p.key, strlen(p.key), ns_at);
-            if (!aof_loading) {
-              aof_append("PEXPIREAT " + std::string(p.key) + " " + std::to_string(ns_at));
-            }
-            r.payload = ser_int(1);
-        } catch (...) {
-            r.payload = ser_err(3, "ERR value is not an integer or out of range");
+      try {
+        uint64_t sec = stoull(p.arg1);
+        uint64_t ns_at = now_ns() + (sec * 1000000000ULL);
+        dict->set_expiry(p.key, strlen(p.key), ns_at);
+        if (!aof_loading) {
+          aof_append("PEXPIREAT " + string(p.key) + " " +
+                     to_string(ns_at));
         }
-        break;
+        r.payload = ser_int(1);
+      } catch (...) {
+        r.payload = ser_err(3, "ERR value is not an integer or out of range");
+      }
+      break;
     }
     case PEXPIREAT: {
-    uint64_t ns_at = std::stoull(p.arg1);
-    dict->set_expiry(p.key, strlen(p.key), ns_at);
+      uint64_t ns_at = stoull(p.arg1);
+      dict->set_expiry(p.key, strlen(p.key), ns_at);
 
-    if (!aof_loading) {
-        aof_append("PEXPIREAT " + std::string(p.key) + " " + p.arg1);
+      if (!aof_loading) {
+        aof_append("PEXPIREAT " + string(p.key) + " " + p.arg1);
+      }
+
+      r.payload = ser_int(1);
+      break;
     }
 
-    r.payload = ser_int(1);
-    break;
-}
-
     case TTL: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if(!e) {
-            r.payload = ser_int(-2); 
-        } else if (e->expires_at == 0) {
-            r.payload = ser_int(-1);  
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        r.payload = ser_int(-2);
+      } else if (e->expires_at == 0) {
+        r.payload = ser_int(-1);
+      } else {
+        uint64_t now = now_ns();
+        if (now >= e->expires_at) {
+          r.payload = ser_int(-2);
         } else {
-            uint64_t now = now_ns();
-            if (now >= e->expires_at) {
-                r.payload = ser_int(-2);
-            } else {
-                long long remaining = (e->expires_at - now) / 1000000000ULL;
-                r.payload = ser_int(remaining);
-            }
+          long long remaining = (e->expires_at - now) / 1000000000ULL;
+          r.payload = ser_int(remaining);
         }
-        break;
+      }
+      break;
     }
 
     case PERSIST: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if (!e) {
-            r.payload = ser_int(0);
-        } else if (e->expires_at == 0) {
-            r.payload = ser_int(0); 
-        } else {
-            dict->set_expiry(p.key, strlen(p.key), 0);
-            r.payload = ser_int(1);
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        r.payload = ser_int(0);
+      } else if (e->expires_at == 0) {
+        r.payload = ser_int(0);
+      } else {
+        dict->set_expiry(p.key, strlen(p.key), 0);
+        if (!aof_loading) {
+          aof_append("PERSIST " + string(p.key));
         }
-        break;
+        r.payload = ser_int(1);
+      }
+      break;
     }
 
     case EXISTS: {
@@ -291,74 +309,82 @@ public:
       break;
     }
     case ZADD: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if (!e) {
-            dict->insert_into(p.key, strlen(p.key)); 
-            e = dict->find_from(p.key, strlen(p.key));
-        }
-        
-        if (!is_zset(e)) {
-            r.payload = ser_err(2, "WRONGTYPE Operation against a key holding the wrong kind of value");
-        } else {
-            ZSet* zset = (ZSet*)e->val->ptr;
-            bool new_elem = zset->zadd(p.arg2, strlen(p.arg2), p.arg1, strlen(p.arg1));
-            if (new_elem) aof_append("ZADD " + string(p.key) + " " + p.arg1 + " " + p.arg2);
-            r.payload = ser_int(new_elem ? 1 : 0);
-        }
-        break;
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        dict->insert_into(p.key, strlen(p.key));
+        e = dict->find_from(p.key, strlen(p.key));
+      }
+
+      if (!is_zset(e)) {
+        r.payload = ser_err(2, "WRONGTYPE Operation against a key holding the "
+                               "wrong kind of value");
+      } else {
+        ZSet *zset = (ZSet *)e->val->ptr;
+        bool new_elem =
+            zset->zadd(p.arg2, strlen(p.arg2), p.arg1, strlen(p.arg1));
+        if (new_elem)
+          aof_append("ZADD " + string(p.key) + " " + p.arg1 + " " + p.arg2);
+        r.payload = ser_int(new_elem ? 1 : 0);
+      }
+      break;
     }
 
     case ZREM: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if (!e) {
-            r.payload = ser_int(0);
-        } else if (!is_zset(e)) {
-            r.payload = ser_err(2, "WRONGTYPE");
-        } else {
-            ZSet* zset = (ZSet*)e->val->ptr;
-            bool removed = zset->zrem(p.arg1, strlen(p.arg1));
-            r.payload = ser_int(removed ? 1 : 0);
-        }
-        break;
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        r.payload = ser_int(0);
+      } else if (!is_zset(e)) {
+        r.payload = ser_err(2, "WRONGTYPE");
+      } else {
+        ZSet *zset = (ZSet *)e->val->ptr;
+        bool removed = zset->zrem(p.arg1, strlen(p.arg1));
+        r.payload = ser_int(removed ? 1 : 0);
+      }
+      break;
     }
 
     case ZRANK: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if (!e) {
-             r.payload = ser_nil();
-        } else if (!is_zset(e)) {
-            r.payload = ser_err(2, "WRONGTYPE");
-        } else {
-            ZSet* zset = (ZSet*)e->val->ptr;
-            int rank = zset->zrank(p.arg1, strlen(p.arg1));
-            if (rank == -1) r.payload = ser_nil();
-            else r.payload = ser_int(rank);
-        }
-        break;
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        r.payload = ser_nil();
+      } else if (!is_zset(e)) {
+        r.payload = ser_err(2, "WRONGTYPE");
+      } else {
+        ZSet *zset = (ZSet *)e->val->ptr;
+        int rank = zset->zrank(p.arg1, strlen(p.arg1));
+        if (rank == -1)
+          r.payload = ser_nil();
+        else
+          r.payload = ser_int(rank);
+      }
+      break;
     }
 
     case ZRANGE: {
-        HashEntry* e = dict->find_from(p.key, strlen(p.key));
-        if (!e) {
-             r.payload = ser_nil(); 
-        } else if (!is_zset(e)) {
-            r.payload = ser_err(2, "WRONGTYPE");
-        } else {
-            ZSet* zset = (ZSet*)e->val->ptr;
-            int start = atoi(p.arg1);
-            int end = atoi(p.arg2);
-            vector<string> res = zset->zrange(start, end);
-            r.payload = ser_arr(res);
-        }
-        break;
+      HashEntry *e = dict->find_from(p.key, strlen(p.key));
+      if (!e) {
+        r.payload = ser_nil();
+      } else if (!is_zset(e)) {
+        r.payload = ser_err(2, "WRONGTYPE");
+      } else {
+        ZSet *zset = (ZSet *)e->val->ptr;
+        int start = atoi(p.arg1);
+        int end = atoi(p.arg2);
+        vector<string> res = zset->zrange(start, end);
+        r.payload = ser_arr(res);
+      }
+      break;
     }
     default:
       r.payload = ser_err(1, "Unknown cmd");
     }
 
-    if(p.key) free(p.key);
-    if(p.arg1) free(p.arg1);
-    if(p.arg2) free(p.arg2);
+    if (p.key)
+      free(p.key);
+    if (p.arg1)
+      free(p.arg1);
+    if (p.arg2)
+      free(p.arg2);
 
     return r;
   }
@@ -369,9 +395,9 @@ public:
 
   static string ser_nil() { return "(nil)"; }
 
-  static string ser_str(const char* buf, uint32_t len) {
+  static string ser_str(const char *buf, uint32_t len) {
     string out = "(str) ";
-    out.append(buf, len); 
+    out.append(buf, len);
     return out;
   }
 
@@ -380,15 +406,17 @@ public:
   static string ser_arr(const vector<string> &elems) {
     string out = "(arr) len=" + to_string(elems.size()) + "\n";
     for (auto &e : elems) {
-        out += ser_str(e.data(), e.size()) + "\n";  
+      out += ser_str(e.data(), e.size()) + "\n";
     }
     out += "(arr) end";
     return out;
   }
 
   static void aof_append(const string &raw_cmd) {
-    if (aof_loading) return;
-    if (aof_fd < 0) return;
+    if (aof_loading)
+      return;
+    if (aof_fd < 0)
+      return;
     string line = raw_cmd + "\n";
     write(aof_fd, line.data(), line.size());
   }
@@ -397,23 +425,23 @@ public:
     aof_loading = true;
     ifstream in("appendonly.aof");
     if (!in.is_open()) {
-        cerr << "[AOF] no file found, skipping replay\n";
-        return;
+      cerr << "[AOF] no file found, skipping replay\n";
+      return;
     }
 
     string line;
     while (getline(in, line)) {
-        if (line.empty())
-            continue;
+      if (line.empty())
+        continue;
 
-        parsed_request p = Server::parse_request(line);
+      parsed_request p = Server::parse_request(line);
 
-        if (p.type == UNKNOWN) {
-            cerr << "[AOF] ignoring unknown command: " << line << "\n";
-            continue;
-        }
+      if (p.type == UNKNOWN) {
+        cerr << "[AOF] ignoring unknown command: " << line << "\n";
+        continue;
+      }
 
-        Response r = Server::process_request(p);
+      Response r = Server::process_request(p);
     }
 
     cerr << "[AOF] replay finished\n";
@@ -421,18 +449,16 @@ public:
   }
 
   void shutdown() {
-      if (listen_fd != -1) {
-          close(listen_fd);
-          listen_fd = -1;
-      }
-      if (epoll_fd != -1) {
-          close(epoll_fd);
-          epoll_fd = -1;
-      }
-      cout << "[Server] Stopped listening." << endl;
+    if (listen_fd != -1) {
+      close(listen_fd);
+      listen_fd = -1;
+    }
+    if (epoll_fd != -1) {
+      close(epoll_fd);
+      epoll_fd = -1;
+    }
+    cout << "[Server] Stopped listening." << endl;
   }
-
-
 
   int epollfd() const { return epoll_fd; }
   int fd() const { return listen_fd; }
@@ -568,19 +594,29 @@ int main() {
   while (g_running) {
     dict->active_expire();
 
+    uint64_t now = now_ns();
+    if (aof_fd != -1 && (now - last_fsync) >= 1000000000ULL) {
+      fdatasync(aof_fd);
+      last_fsync = now;
+    }
+
     int timeout = -1;
     uint64_t next_expiry = dict->get_next_expiry();
     if (next_expiry > 0) {
-        uint64_t now = now_ns();
-        if (next_expiry <= now) timeout = 0;  
-        else timeout = (next_expiry - now) / 1000000; 
+      uint64_t now = now_ns();
+      if (next_expiry <= now)
+        timeout = 0;
+      else
+        timeout = (next_expiry - now) / 1000000;
     }
-    
-    if (timeout == -1 || timeout > 100) timeout = 100;
-    int n = epoll_wait(server.epollfd(), server.get_events(), MAX_EVENTS, timeout);
+
+    if (timeout == -1 || timeout > 100)
+      timeout = 100;
+    int n =
+        epoll_wait(server.epollfd(), server.get_events(), MAX_EVENTS, timeout);
 
     if (n < 0 && errno == EINTR) {
-        continue; // Check g_running loop condition
+      continue; // Check g_running loop condition
     }
 
     for (int i = 0; i < n; i++) {
@@ -605,17 +641,18 @@ int main() {
   server.shutdown();
 
   if (aof_fd != -1) {
-      close(aof_fd);
-      cout << "[Server] AOF closed." << endl;
+    fdatasync(aof_fd);
+    close(aof_fd);
+    cout << "[Server] AOF closed." << endl;
   }
- 
+
   for (auto &pair : connection_map) {
-      close(pair.first); 
-      delete pair.second;  
+    close(pair.first);
+    delete pair.second;
   }
   connection_map.clear();
   cout << "[Server] Clients disconnected." << endl;
- 
+
   delete dict;
   cout << "[Server] Memory freed. Bye!" << endl;
 
